@@ -1,0 +1,6 @@
+{
+    "require": {
+        "cboden/ratchet": "^0.3.5",
+        "php-amqplib/php-amqplib": "2.6.*"
+    }
+}
