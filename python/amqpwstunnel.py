@@ -25,8 +25,10 @@ class ConsumerKeyError(Error):
 
 
 class PikaAsyncConsumer(Thread):
+
     """
     The primary entry point for routing incoming messages to the proper handler.
+
     """
 
     def __init__(self, rabbitmq_url, exchange_name, queue_name,
@@ -44,6 +46,7 @@ class PikaAsyncConsumer(Thread):
                          (default 'direct')
         routing_keys -- the routing key that this consumer listens for
                         (default '#', receives all messages)
+
         """
         self._connection = None
         self._channel = None
@@ -64,6 +67,7 @@ class PikaAsyncConsumer(Thread):
 
     def add_client(self, client):
         """
+
         """
         self._lock.acquire()
         self._client_list.append(client)
@@ -80,6 +84,7 @@ class PikaAsyncConsumer(Thread):
     def connect(self):
         """
         Create an asynchronous connection to the RabbitMQ server at URL.
+
         """
         return pika.SelectConnection(pika.URLParameters(self._url),
                                      on_open_callback=self.on_connection_open,
@@ -94,6 +99,7 @@ class PikaAsyncConsumer(Thread):
         Arguments:
         unused_connection -- the created connection (by this point already
                              available as self._connection)
+
         """
         self._connection.channel(on_open_callback=self.on_channel_open)
 
@@ -106,6 +112,7 @@ class PikaAsyncConsumer(Thread):
         connection -- the connection that was closed (same as self._connection)
         code -- response code from the RabbitMQ server
         text -- response body from the RabbitMQ server
+
         """
         self._channel = None
         if self._shut_down:
@@ -240,9 +247,11 @@ class PikaAsyncConsumer(Thread):
 
 
 class AMQPWSHandler(tornado.websocket.WebSocketHandler):
+
     """
 
     """
+
     def open(self, resource_type, resource_id):
         try:
             self.resource_id = resource_id
@@ -263,7 +272,10 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):
 
 
 class AMQPWSTunnel(tornado.web.Application):
+
     """
+    Send messages from an AMQP queue to WebSockets clients.
+
 
     """
 
@@ -280,14 +292,19 @@ class AMQPWSTunnel(tornado.web.Application):
         self.consumer_config = consumer_config
 
     def consumer_exists(self, resource_id):
-        """
+        """Determine if a consumer exists for a particular resource.
 
+        Arguments:
+            resource_id -- the consumer to find
         """
         return True if resource_id in self.consumer_list else False
 
     def add_client_to_consumer(self, resource_id, client):
-        """
+        """Add a new client to a consumer's messaging list.
 
+        Arguments:
+            resource_id -- the consumer to add to
+            client -- the client to add
         """
         try:
             consumer = self.consumer_list[resource_id]
@@ -303,8 +320,11 @@ class AMQPWSTunnel(tornado.web.Application):
             consumer.add_client(client)
 
     def remove_client_from_consumer(self, resource_id, client):
-        """
+        """Remove a client from a consumer's messaging list.
 
+        Arguments:
+            resource_id -- the consumer to remove from
+            client -- the client to remove
         """
         if not resource_id in self.client_list:
             raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
