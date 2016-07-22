@@ -1,3 +1,7 @@
+import json
+import sys
+import argparse
+
 from threading import Thread, Lock
 
 import tornado.websocket
@@ -292,8 +296,7 @@ class AMQPWSTunnel(tornado.web.Application):
             consumer = PikaAsyncConsumer(self.consumer_config.url,
                                          self.consumer_config.exchange,
                                          self.consumer_config.queue,
-                                         exchange_type=self.consumer_config.type,
-                                         routing_key=self.consumer_config.key)
+                                         exchange_type=self.consumer_config.type)
             self.consumer_list[resource_id] = consumer
             consumer.start()
         finally:
@@ -309,3 +312,11 @@ class AMQPWSTunnel(tornado.web.Application):
 
 
 if __name__ == "__main__":
+    config = json.load(sys.argv[1])
+
+    application = AMQPWSTunnel(consumer_config=config, [
+                               (r"/(experiment)/(.+)", AMQPWSHandler)
+                            ])
+
+    application.listen(8888)
+    tornado.ioloop.IOLoop.current().start()
