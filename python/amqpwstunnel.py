@@ -240,13 +240,22 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):
 
     """
     def open(self, resource_type, resource_id):
-        pass
+        try:
+            self.resource_id = resource_id
+            self.application.add_client_to_consumer(resource_id, self)
+        except AttributeError:
+            print("Error: tornado.web.Application object is not AMQPWSTunnel")
 
     def on_message(self, message):
         pass
 
     def on_close(self):
-        pass
+        try:
+            self.application.remove_client_from_consumer(self.resource_id, self)
+        except KeyError:
+            print("Error: resource %s does not exist" % self.resource_id)
+        finally:
+            self.close()
 
 
 class AMQPWSTunnel(tornado.web.Application):
@@ -267,9 +276,15 @@ class AMQPWSTunnel(tornado.web.Application):
         self.consumer_config = consumer_config
 
     def consumer_exists(self, resource_id):
+        """
+
+        """
         return True if resource_id in self.consumer_list else False
 
     def add_client_to_consumer(self, resource_id, client):
+        """
+
+        """
         try:
             consumer = self.consumer_list[resource_id]
 
@@ -286,7 +301,7 @@ class AMQPWSTunnel(tornado.web.Application):
 
     def remove_client_from_consumer(self, resource_id, client):
         """
-        
+
         """
         if not resource_id in self.client_list:
             raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
