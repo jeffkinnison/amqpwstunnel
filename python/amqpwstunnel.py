@@ -66,14 +66,21 @@ class PikaAsyncConsumer(Thread):
         self._routing_key = routing_key
 
     def add_client(self, client):
-        """
+        """Add a new client to the recipient list.
 
+        Arguments:
+            client -- a reference to the client object to add
         """
         self._lock.acquire()
         self._client_list.append(client)
         self._lock.release()
 
     def remove_client(self, client):
+        """Remove a client from the recipient list.
+
+        Arguments:
+            client -- a reference to the client object to remove
+        """
         self._lock.acquire()
         for i in range(0, len(self._client_list)):
             if self._client_list[i] is client:
@@ -249,10 +256,25 @@ class PikaAsyncConsumer(Thread):
 class AMQPWSHandler(tornado.websocket.WebSocketHandler):
 
     """
+    Pass messages to a connected WebSockets client.
 
+    A subclass of the Tornado WebSocketHandler class, this class takes no
+    action when receiving a message from the client. Instead, it is associated
+    with an AMQP consumer and writes a message to the client each time one is
+    consumed in the queue.
     """
 
     def open(self, resource_type, resource_id):
+        """Associate a new connection with a consumer.
+
+        When a new connection is opened, it is a request to retrieve data
+        from an AMQP queue. The open operation should also do some kind of
+        authentication.
+
+        Arguments:
+            resource_type -- "experiment" or "project" or "data"
+            resource_id -- the Airavata id for the resource
+        """
         try:
             self.resource_id = resource_id
             self.application.add_client_to_consumer(resource_id, self)
@@ -260,7 +282,14 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):
             print("Error: tornado.web.Application object is not AMQPWSTunnel")
 
     def on_message(self, message):
-        pass
+        """Handle incoming messages from the client.
+
+        Tornado requires subclasses to override this method, however in this
+        case we do not wish to take any action when receiving a message from
+        the client. The purpose of this class is only to push messages to the
+        client.
+        """
+        message = None
 
     def on_close(self):
         try:
@@ -276,7 +305,9 @@ class AMQPWSTunnel(tornado.web.Application):
     """
     Send messages from an AMQP queue to WebSockets clients.
 
-
+    In addition to the standard Tornado Application class functionality, this
+    class maintains a list of active AMQP consumers and maps WebSocketHandlers
+    to the correct consumers.
     """
 
     def __init__(self, consumer_list=None, consumer_config=None handlers=None,
