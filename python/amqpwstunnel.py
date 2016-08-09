@@ -5,6 +5,7 @@ import weakref
 
 from threading import Thread, Lock
 
+import pika
 import tornado.websocket
 import tornado.ioloop
 
@@ -49,6 +50,8 @@ class PikaAsyncConsumer(Thread):
                         (default '#', receives all messages)
 
         """
+        print("Creating new consumer")
+        super(PikaAsyncConsumer, self).__init__(daemon=True)
         self._connection = None
         self._channel = None
         self._shut_down = False
@@ -229,9 +232,9 @@ class PikaAsyncConsumer(Thread):
         for client in self._client_list:
             # Parentheses after client to deference the weakref to its
             # strong reference
-            self.client().write_message(body)
+            client().write_message(body)
         self._lock.release()
-        #self._channel.basic_ack(delivery_tag=method.delivery_tag)
+        self._channel.basic_ack(delivery_tag=method.delivery_tag)
 
     def stop_consuming(self):
         """
@@ -240,10 +243,11 @@ class PikaAsyncConsumer(Thread):
         if self._channel:
             self._channel.basic_cancel(self.close_channel, self._consumer_tag)
 
-    def close_channel(self):
+    def close_channel(self, unused):
         """
         Close the channel to shut down the consumer and connection.
         """
+        self._channel.queue_delete(queue=self._queue)
         self._channel.close()
 
     def run(self):
@@ -299,7 +303,7 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):
             self.application.add_client_to_consumer(resource_id, self)
         except AttributeError as e:
             print("Error: tornado.web.Application object is not AMQPWSTunnel")
-            print(e.__cause__)
+            print(e)
 
     def on_message(self, message):
         """Handle incoming messages from the client.
@@ -332,7 +336,7 @@ class AMQPWSTunnel(tornado.web.Application):
 
     def __init__(self, consumer_list=None, consumer_config=None, handlers=None,
                  default_host='', transforms=None, **settings):
-        print("Starting AMWP-WS-Tunnel application")
+        print("Starting AMQP-WS-Tunnel application")
         super(AMQPWSTunnel, self).__init__(handlers=handlers,
                                            default_host=default_host,
                                            transforms=transforms,
@@ -349,7 +353,7 @@ class AMQPWSTunnel(tornado.web.Application):
         Arguments:
             resource_id -- the consumer to find
         """
-        return True if resource_id in self.consumer_list else False
+        return resource_id in self.consumer_list
 
     def add_client_to_consumer(self, resource_id, client):
         """Add a new client to a consumer's messaging list.
@@ -359,12 +363,16 @@ class AMQPWSTunnel(tornado.web.Application):
             client -- the client to add
         """
         if not self.consumer_exists(resource_id):
-            consumer = PikaAsyncConsumer(self.consumer_config.rabbitmq_url,
-                                         self.consumer_config.exchange_name,
-                                         self.consumer_config.queue_name,
-                                         exchange_type=self.consumer_config.type,
+            print("Creating new consumer")
+            print(self.consumer_config)
+            consumer = PikaAsyncConsumer(self.consumer_config["rabbitmq_url"],
+                                         self.consumer_config["exchange_name"],
+                                         self.consumer_config["queue_name"],
+                                         exchange_type=self.consumer_config["exchange_type"],
                                          routing_key=resource_id)
+            print("Adding to consumer list")
             self.consumer_list[resource_id] = consumer
+            print("Starting consumer")
             consumer.start()
 
         print("Adding new client to %s" % (resource_id))
@@ -378,10 +386,11 @@ class AMQPWSTunnel(tornado.web.Application):
             resource_id -- the consumer to remove from
             client -- the client to remove
         """
-        if self.consumer_exists:
+        if self.consumer_exists(resource_id):
             print("Removing client from %s" % (resource_id))
             self.consumer_list[resource_id].remove_client(client)
-        raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
+        else:
+            raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
 
     def shutdown(self):
         """Shut down the application and release all resources.
@@ -389,8 +398,11 @@ class AMQPWSTunnel(tornado.web.Application):
 
         """
         for name, consumer in self.consumer_list.items():
-            consumer.join()
-            self.consumer_list.pop(name)
+            consumer.stop()
+            #consumer.join()
+            #self.consumer_list[name] = None
+
+        #self.consumer_list = {}
 
 
 
