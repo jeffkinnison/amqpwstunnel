@@ -1,6 +1,7 @@
+import argparse
 import json
 import sys
-import argparse
+import weakref
 
 from threading import Thread, Lock
 
@@ -72,7 +73,9 @@ class PikaAsyncConsumer(Thread):
             client -- a reference to the client object to add
         """
         self._lock.acquire()
-        self._client_list.append(client)
+        # Create a weakref to ensure that cyclic references to WebSocketHandler
+        # objects do not cause problems for garbage collection
+        self._client_list.append(weakref.ref(client))
         self._lock.release()
 
     def remove_client(self, client):
@@ -83,10 +86,13 @@ class PikaAsyncConsumer(Thread):
         """
         self._lock.acquire()
         for i in range(0, len(self._client_list)):
-            if self._client_list[i] is client:
+            # Parentheses after _client_list[i] to deference the weakref to its
+            # strong reference
+            if self._client_list[i]() is client:
                 self._client_list.pop(i)
                 break
         self._lock.release()
+
 
     def connect(self):
         """
@@ -221,7 +227,9 @@ class PikaAsyncConsumer(Thread):
         print("Received Message: %s" % body)
         self._lock.acquire()
         for client in self._client_list:
-            self._client_list.write_message(body)
+            # Parentheses after client to deference the weakref to its
+            # strong reference
+            self.client().write_message(body)
         self._lock.release()
         #self._channel.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -376,9 +384,14 @@ class AMQPWSTunnel(tornado.web.Application):
         raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
 
     def shutdown(self):
+        """Shut down the application and release all resources.
+
+
         """
-        """
-        pass
+        for name, consumer in self.consumer_list.items():
+            consumer.join()
+            self.consumer_list.pop(name)
+
 
 
 if __name__ == "__main__":
