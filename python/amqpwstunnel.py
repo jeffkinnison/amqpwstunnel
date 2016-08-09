@@ -264,6 +264,17 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):
     consumed in the queue.
     """
 
+    def check_origin(self, origin):
+        """Check the domain origin of the connection request.
+
+        This can be made more robust to ensure that connections are only
+        accepted from verified PGAs.
+
+        Arguments:
+            origin -- the value of the Origin HTTP header
+        """
+        return True
+
     def open(self, resource_type, resource_id):
         """Associate a new connection with a consumer.
 
@@ -278,8 +289,9 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):
         try:
             self.resource_id = resource_id
             self.application.add_client_to_consumer(resource_id, self)
-        except AttributeError:
+        except AttributeError as e:
             print("Error: tornado.web.Application object is not AMQPWSTunnel")
+            print(e.__cause__)
 
     def on_message(self, message):
         """Handle incoming messages from the client.
@@ -310,8 +322,9 @@ class AMQPWSTunnel(tornado.web.Application):
     to the correct consumers.
     """
 
-    def __init__(self, consumer_list=None, consumer_config=None handlers=None,
+    def __init__(self, consumer_list=None, consumer_config=None, handlers=None,
                  default_host='', transforms=None, **settings):
+        print("Starting AMWP-WS-Tunnel application")
         super(AMQPWSTunnel, self).__init__(handlers=handlers,
                                            default_host=default_host,
                                            transforms=transforms,
@@ -337,18 +350,18 @@ class AMQPWSTunnel(tornado.web.Application):
             resource_id -- the consumer to add to
             client -- the client to add
         """
-        try:
-            consumer = self.consumer_list[resource_id]
-
-        except ConsumerKeyError:
-            consumer = PikaAsyncConsumer(self.consumer_config.url,
-                                         self.consumer_config.exchange,
-                                         self.consumer_config.queue,
-                                         exchange_type=self.consumer_config.type)
+        if not self.consumer_exists(resource_id):
+            consumer = PikaAsyncConsumer(self.consumer_config.rabbitmq_url,
+                                         self.consumer_config.exchange_name,
+                                         self.consumer_config.queue_name,
+                                         exchange_type=self.consumer_config.type,
+                                         routing_key=resource_id)
             self.consumer_list[resource_id] = consumer
             consumer.start()
-        finally:
-            consumer.add_client(client)
+
+        print("Adding new client to %s" % (resource_id))
+        consumer = self.consumer_list[resource_id]
+        consumer.add_client(client)
 
     def remove_client_from_consumer(self, resource_id, client):
         """Remove a client from a consumer's messaging list.
@@ -357,17 +370,30 @@ class AMQPWSTunnel(tornado.web.Application):
             resource_id -- the consumer to remove from
             client -- the client to remove
         """
-        if not resource_id in self.client_list:
-            raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
-        self.consumer_list[resource_id].remove_client(client)
+        if self.consumer_exists:
+            print("Removing client from %s" % (resource_id))
+            self.consumer_list[resource_id].remove_client(client)
+        raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
+
+    def shutdown(self):
+        """
+        """
+        pass
 
 
 if __name__ == "__main__":
-    config = json.load(sys.argv[1])
+    i = open(sys.argv[1])
+    config = json.load(i)
+    i.close()
 
-    application = AMQPWSTunnel(consumer_config=config, [
-                               (r"/(experiment)/(.+)", AMQPWSHandler)
-                            ])
+    application = AMQPWSTunnel(handlers=[
+                                    (r"/(experiment)/(.+)", AMQPWSHandler)
+                                ],
+                                consumer_config=config, )
 
     application.listen(8888)
-    tornado.ioloop.IOLoop.current().start()
+
+    try:
+        tornado.ioloop.IOLoop.current().start()
+    except KeyboardInterrupt:
+        application.shutdown()
