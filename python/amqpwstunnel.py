@@ -411,10 +411,17 @@ if __name__ == "__main__":
     config = json.load(i)
     i.close()
 
+    settings = {
+        "cookie_secret": "",
+        "login_url": "/login",
+        "xsrf_cookies": True
+    }
+
     application = AMQPWSTunnel(handlers=[
                                     (r"/(experiment)/(.+)", AMQPWSHandler)
                                 ],
-                                consumer_config=config, )
+                                consumer_config=config,
+                                **settings)
 
     application.listen(8888)
 

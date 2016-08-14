@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>AMQP Websockets Test</title>
+
+    <style>
+        #content {
+            width: 100%;
+            min-height: 250px;
+        }
+
+        #ws-url-label, #ws-url-input, #ws-connect-button {
+            display: inline;
+            float: left;
+            margin-right: 10px;
+        }
+
+        #logs {
+            background-color: #888888;
+            width: 50%;
+            overflow-y: auto;
+            list-style: none;
+            padding: 3px;
+            margin-left: auto;
+            margin-right: auto;
+            text-align: center;
+        }
+
+        .log {
+            background-color: #cccccc;
+            display: inline-block;
+            min-height: 30px;
+            width: 90%;
+            border: 1px solid #000000;
+            padding: 3px;
+            margin-left: auto;
+            margin-right: auto;
+            margin-bottom: 5px;
+            text-align: left;
+        }
+    </style>
+</head>
+
+<body>
+
+<div id="content">
+    <div id="ws-url">
+        <label id="ws-url-label" for="ws-url-input">WebSockets URL</label>
+        <input type="text" name="ws-url-input" id="ws-url-input" />
+        <button id="ws-connect-button" class="open">Connect</button><br />
+    </div>
+
+    <ul id="logs"><p>Logs</p></ul>
+</div>
+
+<script src="https://code.jquery.com/jquery-3.1.0.min.js"
+        integrity="sha256-cCueBR6CsyA4/9szpPfrX3s49M9vUU5BgtiJj06wt/s="
+        crossorigin="anonymous"></script>
+<script type="text/javascript">
+    var ws, open_handler, message_handler, error_handler, close_handler;
+
+    open_handler = function(e) {
+        $("#ws-connect-button").toggleClass("open close").text("Disconnect");
+        $("#ws-url-input").prop("disabled", true);
+    }
+
+    message_handler = function(e) {
+        var msg;
+        msg = JSON.parse(e.data);
+
+        console.log(msg)
+
+        if (msg.hasOwnProperty("logs")) {
+            for (log in msg.logs) {
+                if (msg.logs.hasOwnProperty(log)) {
+                    $("#logs").append($('<li class="log">' + log + '</li>'));
+                }
+            }
+        }
+    }
+
+    close_handler = function(e) {
+        $("#ws-connect-button").toggleClass("open close").text("Connect");
+        $("#ws-url-input").prop("disabled", false);
+    }
+
+    $("#ws-connect-button").on('click', function(e) {
+        var $button, url;
+        e.stopPropagation();
+        $button = $("#ws-connect-button");
+
+        if ($button.hasClass("open")) {
+            url = $("#ws-url-input").val();
+            ws = new WebSocket(url);
+            ws.onopen = open_handler;
+            ws.onmessage = message_handler;
+            ws.onclose = close_handler;
+        }
+        else if ($button.hasClass("close")) {
+            ws.close();
+        }
+
+        return false;
+    });
+
+</script>
+
+</body>
+
+</html>
