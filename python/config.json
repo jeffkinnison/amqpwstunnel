@@ -1,0 +1,6 @@
+{
+    "rabbitmq_url": "amqp://localhost:5672",
+    "exchange_name": "simstream",
+    "queue_name": "test",
+    "exchange_type": "direct"
+}
