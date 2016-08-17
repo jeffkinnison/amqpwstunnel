@@ -50,7 +50,10 @@
     <div id="ws-url">
         <label id="ws-url-label" for="ws-url-input">WebSockets URL</label>
         <input type="text" name="ws-url-input" id="ws-url-input" />
-        <button id="ws-connect-button" class="open">Connect</button><br />
+        <input type="text" name="username" id="username" placeholder="Username" />
+        <input type="password" name="password" id="password" placeholder="Password" />
+        <button id="ws-connect-button" class="open">Connect</button>
+        <button id="ws-send-credentials">Send</button><br />
     </div>
 
     <ul id="logs"><p>Logs</p></ul>
@@ -62,17 +65,19 @@
 <script type="text/javascript">
     var ws, open_handler, message_handler, error_handler, close_handler;
 
-    open_handler = function(e) {
+    ws = new WebSocket("ws://localhost:8888/experiment/test");
+
+    ws.onopen = function() {
         $("#ws-connect-button").toggleClass("open close").text("Disconnect");
         $("#ws-url-input").prop("disabled", true);
     }
 
-    message_handler = function(e) {
+    ws.onmessage = function(e) {
         var msg;
+
+        console.log(e.data);
+
         msg = JSON.parse(e.data);
-
-        console.log(msg)
-
         if (msg.hasOwnProperty("logs")) {
             for (log in msg.logs) {
                 if (msg.logs.hasOwnProperty(log)) {
@@ -82,28 +87,29 @@
         }
     }
 
-    close_handler = function(e) {
+    ws.onclose = function(e) {
         $("#ws-connect-button").toggleClass("open close").text("Connect");
         $("#ws-url-input").prop("disabled", false);
     }
 
-    $("#ws-connect-button").on('click', function(e) {
-        var $button, url;
+    $("#ws-send-credentials").on("click", function(e) {
         e.stopPropagation();
-        $button = $("#ws-connect-button");
-
-        if ($button.hasClass("open")) {
-            url = $("#ws-url-input").val();
-            ws = new WebSocket(url);
-            ws.onopen = open_handler;
-            ws.onmessage = message_handler;
-            ws.onclose = close_handler;
-        }
-        else if ($button.hasClass("close")) {
-            ws.close();
-        }
-
-        return false;
+        uname = $("#username").val();
+        pass = $("#password").val();
+        console.log("Sending credentials");
+        //ws.send(JSON.stringify({username: uname, password: pass}));
+        $.ajax({
+            url: "http://localhost:8888/auth",
+            method: "post",
+            data: {username: uname, password: pass},
+            crossDomain: true,
+            success: function(data) {
+                console.log("Authenticated");
+            },
+            error: function(e) {
+                console.log(e);
+            }
+        });
     });
 
 </script>

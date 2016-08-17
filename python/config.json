@@ -1,6 +1,8 @@
 {
-    "rabbitmq_url": "amqp://localhost:5672",
+    "rabbitmq_url": "amqp://gw56.iu.xsede.org:5672/messaging",
     "exchange_name": "simstream",
     "queue_name": "test",
-    "exchange_type": "direct"
+    "exchange_type": "direct",
+    "oauth_client_key": "y7xgdnNUx6ifOswJTPcqtzw4aOEa",
+    "oauth_client_secret": "CgfbuupAPhaOBSBPSScZUWHNANwa"
 }

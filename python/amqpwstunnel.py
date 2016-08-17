@@ -1,13 +1,25 @@
 import argparse
+import functools
 import json
 import sys
 import weakref
 
 from threading import Thread, Lock
 
+try:
+    from urllib.parse import urlencode
+except ImportError:
+    from urllib import urlencode
+
 import pika
 import tornado.websocket
 import tornado.ioloop
+import tornado.auth
+import tornado.escape
+import tornado.concurrent
+
+
+SETTINGS = {}
 
 
 class Error(Exception):
@@ -265,7 +277,58 @@ class PikaAsyncConsumer(Thread):
         self.stop_consuming()
 
 
-class AMQPWSHandler(tornado.websocket.WebSocketHandler):
+class Wso2OAuth2Mixin(tornado.auth.OAuth2Mixin):
+    _OAUTH_AUTHORIZE_URL = "https://idp.scigap.org:9443/oauth2/authorize"
+    _OAUTH_ACCESS_TOKEN_URL = "https://idp.scigap.org:9443/oauth2/token"
+
+    @tornado.auth._auth_return_future
+    def get_authenticated_user(self, username, password, callback=None):
+        print("Authenticating user %s" % (username))
+        http = self.get_auth_http_client()
+        body = urlencode({
+            "client_id": SETTINGS["oauth_client_key"],
+            "client_secret": SETTINGS["oauth_client_secret"],
+            "grant_type": "password",
+            "username": username,
+            "password": password
+        })
+        http.fetch(self._OAUTH_ACCESS_TOKEN_URL, functools.partial(self._on_access_token, callback), method="POST", body=body)
+
+    def _on_access_token(self, future, response):
+        if response.error:
+            print(str(response))
+            print(response.body)
+            print(response.error)
+            future.set_exception(AuthError('WSO2 auth error: %s' % str(response)))
+            return
+
+        print(response.body)
+        future.set_result(response.body)
+
+class AuthHandler(tornado.web.RequestHandler, Wso2OAuth2Mixin):
+    def set_default_headers(self):
+        self.set_header("Access-Control-Allow-Origin", "*")
+        self.set_header("Access-Control-Allow-Headers", "x-requested-with")
+        self.set_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+
+    def get(self):
+        if self.get_secure_cookie("ws_auth_token") is None:
+            self.set_status(403)
+        else:
+            content = "authenticated"
+        self.write(content)
+
+    @tornado.gen.coroutine
+    def post(self):
+        print("received request")
+        username = self.get_body_argument("username")
+        password = self.get_body_argument("password")
+        access = yield self.get_authenticated_user(username, password)
+        access = tornado.escape.json_decode(access)
+        self.set_secure_cookie("ws-auth-token", access.access_token, expires_days=1)
+
+
+class AMQPWSHandler(tornado.websocket.WebSocketHandler):#, Wso2OAuth2Mixin):
 
     """
     Pass messages to a connected WebSockets client.
@@ -298,12 +361,13 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):
             resource_type -- "experiment" or "project" or "data"
             resource_id -- the Airavata id for the resource
         """
-        try:
-            self.resource_id = resource_id
-            self.application.add_client_to_consumer(resource_id, self)
-        except AttributeError as e:
-            print("Error: tornado.web.Application object is not AMQPWSTunnel")
-            print(e)
+        self.stream.set_nodelay(True)
+        self.resource_id = resource_id
+        self.write_message("Opened the connection")
+        # print("Searching for secure cookie")
+        # if self.get_secure_cookie("ws-auth-token") is not None:
+        #     print("Found secure cookie")
+        #     self.add_to_consumer()
 
     def on_message(self, message):
         """Handle incoming messages from the client.
@@ -313,15 +377,35 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):
         the client. The purpose of this class is only to push messages to the
         client.
         """
-        message = None
+        self.write_message("Moop")
+        print("Received message")
+        try:
+            data = tornado.escape.json_decode(message)
+            if self.get_secure_cookie("ws-auth-token") is None:
+                print("Getting auth token")
+                access = yield self.get_authenticated_user(
+                                    data["username"],
+                                    data["password"]
+                                )
+                self.add_to_consumer()
+        except KeyError:
+            self.write_message(tornado.escape.json_encode({"error": "Insufficient authentication information"}))
 
     def on_close(self):
         try:
+            print("Closing connection")
             self.application.remove_client_from_consumer(self.resource_id, self)
         except KeyError:
             print("Error: resource %s does not exist" % self.resource_id)
         finally:
             self.close()
+
+    def add_to_consumer(self):
+        try:
+            self.application.add_client_to_consumer(self.resource_id, self)
+        except AttributeError as e:
+            print("Error: tornado.web.Application object is not AMQPWSTunnel")
+            print(e)
 
 
 class AMQPWSTunnel(tornado.web.Application):
@@ -411,13 +495,16 @@ if __name__ == "__main__":
     config = json.load(i)
     i.close()
 
+    SETTINGS["oauth_client_key"] = config["oauth_client_key"]
+    SETTINGS["oauth_client_secret"] = config["oauth_client_secret"]
+
     settings = {
-        "cookie_secret": "",
-        "login_url": "/login",
-        "xsrf_cookies": True
+        "cookie_secret": "omnomnom",
+        #"xsrf_cookies": True
     }
 
     application = AMQPWSTunnel(handlers=[
+                                    (r"/auth", AuthHandler),
                                     (r"/(experiment)/(.+)", AMQPWSHandler)
                                 ],
                                 consumer_config=config,
