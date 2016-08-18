@@ -1,7 +1,9 @@
 import argparse
+import base64
 import functools
 import json
 import sys
+import uuid
 import weakref
 
 from threading import Thread, Lock
@@ -35,6 +37,12 @@ class ConsumerKeyError(Error):
     def __init__(self, message, key):
         self.message = message
         self.key = key
+
+class AuthError(Error):
+    """Raised when something went wrong during authentication"""
+    def __init__(self, error, code):
+        self.message = error
+        self.code = code
 
 
 
@@ -288,7 +296,7 @@ class Wso2OAuth2Mixin(tornado.auth.OAuth2Mixin):
         body = urlencode({
             "client_id": SETTINGS["oauth_client_key"],
             "client_secret": SETTINGS["oauth_client_secret"],
-            "grant_type": "password",
+            "grant_type": SETTINGS["oauth_grant_type"],
             "username": username,
             "password": password
         })
@@ -299,33 +307,75 @@ class Wso2OAuth2Mixin(tornado.auth.OAuth2Mixin):
             print(str(response))
             print(response.body)
             print(response.error)
-            future.set_exception(AuthError('WSO2 auth error: %s' % str(response)))
+            future.set_exception(AuthError(response.error, response.code))
             return
 
         print(response.body)
-        future.set_result(response.body)
+        future.set_result(tornado.escape.json_decode(response.body))
 
 class AuthHandler(tornado.web.RequestHandler, Wso2OAuth2Mixin):
+    def get_current_user(self):
+        expires_in = self.get_secure_cookie("expires-in", max_age_days=SETTINGS['maximum_cookie_age'])
+        print(expires_in)
+        if expires_in:
+            return self.get_secure_cookie("ws-auth-token", max_age_days=float(expires_in))
+        return None
+
     def set_default_headers(self):
+        self.set_header("Content-Type", "text/plain")
         self.set_header("Access-Control-Allow-Origin", "*")
         self.set_header("Access-Control-Allow-Headers", "x-requested-with")
         self.set_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
 
     def get(self):
-        if self.get_secure_cookie("ws_auth_token") is None:
-            self.set_status(403)
+        if self.get_current_user():
+            self.set_status(200)
+            print("Authenticated")
+            self.write("Authenticated")
+
         else:
-            content = "authenticated"
-        self.write(content)
+            self.set_status(403)
+            print("Not Authenticated")
+            self.write("Not Authenticated")
 
     @tornado.gen.coroutine
     def post(self):
-        print("received request")
-        username = self.get_body_argument("username")
-        password = self.get_body_argument("password")
-        access = yield self.get_authenticated_user(username, password)
-        access = tornado.escape.json_decode(access)
-        self.set_secure_cookie("ws-auth-token", access.access_token, expires_days=1)
+        try:
+            username = self.get_body_argument("username")
+            password = self.get_body_argument("password")
+            redirect = self.get_body_argument("redirect")
+            if username == "" or password == "":
+                raise tornado.web.MissingArgumentError
+
+            access = yield self.get_authenticated_user(username, password)
+            days = (access["expires_in"] / 3600) / 24 # Convert to days
+            print(days)
+            self.set_secure_cookie("ws-auth-token",
+                                   access["access_token"],
+                                   expires_days=days)
+            self.set_secure_cookie("expires-in",
+                                   str(1),
+                                   expires_days=SETTINGS['maximum_cookie_age'])
+            self.write("Success")
+        except tornado.web.MissingArgumentError:
+            print("Missing an argument")
+            self.set_status(400)
+            self.write("Authentication information missing")
+        except AuthError as e:
+            print("The future freaks me out")
+            self.set_status(access.code)
+            self.set_header("Content-Type", "text/html")
+            self.write(access.message)
+
+        success_code = """<p>Redirecting to <a href="%(url)s">%(url)s</a></p>
+<script type="text/javascript">
+window.location = %(url)s;
+</script>
+        """ % { 'url': redirect}
+        self.set_status(200)
+        self.redirect(redirect)
+        #return self.render_string(success_code)
+
 
 
 class AMQPWSHandler(tornado.websocket.WebSocketHandler):#, Wso2OAuth2Mixin):
@@ -338,6 +388,11 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):#, Wso2OAuth2Mixin):
     with an AMQP consumer and writes a message to the client each time one is
     consumed in the queue.
     """
+
+    # def set_default_headers(self):
+        # self.set_header("Access-Control-Allow-Origin", "*")
+        # self.set_header("Access-Control-Allow-Headers", "x-requested-with")
+        # self.set_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
 
     def check_origin(self, origin):
         """Check the domain origin of the connection request.
@@ -364,10 +419,17 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):#, Wso2OAuth2Mixin):
         self.stream.set_nodelay(True)
         self.resource_id = resource_id
         self.write_message("Opened the connection")
-        # print("Searching for secure cookie")
-        # if self.get_secure_cookie("ws-auth-token") is not None:
+
+        self.add_to_consumer()
+
+        # expires_in = self.get_secure_cookie("expires_in", max_age_days=SETTINGS["maximum_cookie_age"])
+        # if expires_in is not None and self.get_secure_cookie("ws-auth-token", max_age_days=float(expires_in)):
         #     print("Found secure cookie")
+        #     self.write_message("Authenticated")
         #     self.add_to_consumer()
+        # else:
+        #     print("Closing connection")
+        #     self.close()
 
     def on_message(self, message):
         """Handle incoming messages from the client.
@@ -377,19 +439,19 @@ class AMQPWSHandler(tornado.websocket.WebSocketHandler):#, Wso2OAuth2Mixin):
         the client. The purpose of this class is only to push messages to the
         client.
         """
-        self.write_message("Moop")
-        print("Received message")
-        try:
-            data = tornado.escape.json_decode(message)
-            if self.get_secure_cookie("ws-auth-token") is None:
-                print("Getting auth token")
-                access = yield self.get_authenticated_user(
-                                    data["username"],
-                                    data["password"]
-                                )
-                self.add_to_consumer()
-        except KeyError:
-            self.write_message(tornado.escape.json_encode({"error": "Insufficient authentication information"}))
+        print(message)
+        message = tornado.escape.json_decode(message)
+        access = yield self.get_authenticated_user(message["username"], message["password"])
+        access = access
+        days = (access["expires_in"] / 3600) / 24 # Convert to days
+        print(days)
+        self.set_secure_cookie("ws-auth-token",
+                               access["access_token"],
+                               expires_days=days)
+        self.set_secure_cookie("expires_in",
+                               str(days),
+                               expires_days=SETTINGS['maximum_cookie_age'])
+
 
     def on_close(self):
         try:
@@ -473,8 +535,8 @@ class AMQPWSTunnel(tornado.web.Application):
         if self.consumer_exists(resource_id):
             print("Removing client from %s" % (resource_id))
             self.consumer_list[resource_id].remove_client(client)
-        else:
-            raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
+        #else:
+        #    raise ConsumerKeyError("Trying to remove client from nonexistent consumer", resource_id)
 
     def shutdown(self):
         """Shut down the application and release all resources.
@@ -497,9 +559,11 @@ if __name__ == "__main__":
 
     SETTINGS["oauth_client_key"] = config["oauth_client_key"]
     SETTINGS["oauth_client_secret"] = config["oauth_client_secret"]
+    SETTINGS["oauth_grant_type"] = config["oauth_grant_type"]
+    SETTINGS["maximum_cookie_age"] = config["maximum_cookie_age"]
 
     settings = {
-        "cookie_secret": "omnomnom",
+        "cookie_secret": base64.b64encode(uuid.uuid4().bytes + uuid.uuid4().bytes),
         #"xsrf_cookies": True
     }
 
@@ -508,6 +572,7 @@ if __name__ == "__main__":
                                     (r"/(experiment)/(.+)", AMQPWSHandler)
                                 ],
                                 consumer_config=config,
+                                debug=True,
                                 **settings)
 
     application.listen(8888)
